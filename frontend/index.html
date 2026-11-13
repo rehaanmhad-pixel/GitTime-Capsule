@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>GitTime-Capsule</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+    input { width: 70%; padding: 0.5rem; }
+    button { padding: 0.5rem 1rem; }
+    #error { color: #b00020; margin-top: 1rem; }
+    table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; }
+    td, th { border-bottom: 1px solid #ddd; padding: 0.3rem 0.5rem; text-align: left; }
+  </style>
+</head>
+<body>
+  <h1>GitTime-Capsule</h1>
+  <p>Enter the folder path of a Git repository on this computer.</p>
+  <input id="path" placeholder="e.g. ~/test-repos/click">
+  <button id="go">Analyze</button>
+  <div id="error"></div>
+  <div id="results" hidden>
+    <h2>Overview</h2>
+    <p id="summary"></p>
+    <h2>Top contributors</h2>
+    <table id="contributors"></table>
+    <h2>Most frequently changed files</h2>
+    <table id="files"></table>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    function fillTable(table, headers, rows) {
+      table.replaceChildren();
+      const head = table.insertRow();
+      headers.forEach((h) => {
+        const th = document.createElement("th");
+        th.textContent = h;
+        head.appendChild(th);
+      });
+      rows.forEach((row) => {
+        const tr = table.insertRow();
+        row.forEach((value) => {
+          tr.insertCell().textContent = value;
+        });
+      });
+    }
+
+    $("go").addEventListener("click", async () => {
+      $("error").textContent = "";
+      $("results").hidden = true;
+      try {
+        const res = await fetch("/api/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: $("path").value }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          $("error").textContent = data.error || "Something went wrong.";
+          return;
+        }
+        $("summary").textContent =
+          data.total_commits + " commits by " + data.total_contributors + " contributors in " + data.path;
+        fillTable($("contributors"), ["Name", "Commits"],
+          data.contributors.map((c) => [c.name, c.commits]));
+        fillTable($("files"), ["File", "Times changed"],
+          data.top_files.map((f) => [f.path, f.changes]));
+        $("results").hidden = false;
+      } catch (e) {
+        $("error").textContent = "Could not reach the backend: " + e;
+      }
+    });
+  </script>
+</body>
+</html>
