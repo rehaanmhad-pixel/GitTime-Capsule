@@ -4,11 +4,11 @@
   <meta charset="UTF-8">
   <title>GitTime-Capsule</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 1000px; margin: 2rem auto; padding: 0 1rem; }
+    body { font-family: system-ui, sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
     input { width: 70%; padding: 0.5rem; }
     button { padding: 0.5rem 1rem; }
     #error { color: #b00020; margin-top: 1rem; }
-    table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; font-size: 0.9rem; }
+    table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; font-size: 0.85rem; }
     td, th { border-bottom: 1px solid #ddd; padding: 0.3rem 0.5rem; text-align: left; }
     .note { color: #555; font-size: 0.85rem; }
     .scroll { max-height: 300px; overflow-y: auto; }
@@ -25,9 +25,21 @@
     <h2>Overview</h2>
     <table id="overview"></table>
 
+    <h2>Languages</h2>
+    <p class="note">
+      Levels: <b>deep</b> = imports extracted and linked (Python, JavaScript, TypeScript, Java, C, C++, Rust) ·
+      <b>metrics</b> = recognised, line counts only (Go, C#) ·
+      <b>basic</b> = other text files · <b>binary</b> = Git history only.
+    </p>
+    <table id="languages"></table>
+
     <h2>Hotspots</h2>
     <p class="note" id="scoring"></p>
-    <table id="hotspots"></table>
+    <div class="scroll"><table id="hotspots"></table></div>
+
+    <h2>Most imported files</h2>
+    <p class="note" id="deps"></p>
+    <table id="imported"></table>
 
     <h2>Top contributors</h2>
     <table id="contributors"></table>
@@ -82,19 +94,32 @@
           ["Lines deleted (all time)", o.lines_deleted],
         ]);
 
+        fillTable($("languages"), ["Language", "Level", "Files", "Non-blank lines"],
+          data.languages.map((l) => [l.language, l.level, l.files, l.code_lines]));
+
         const s = data.scoring;
         $("scoring").textContent =
           "Score = " + s.frequency_weight * 100 + "% change frequency + " +
           s.churn_weight * 100 + "% churn (log-scaled) + " +
           s.recent_weight * 100 + "% commits in the last " + s.recent_days +
-          " days. A high score means 'worth a look', not 'buggy'.";
+          " days + " + s.size_weight * 100 + "% file size (log-scaled). " +
+          "A high score means 'worth a look', not 'buggy'.";
 
         fillTable($("hotspots"),
-          ["File", "Score", "Commits", "Churn", "Recent", "Authors", "Top author share"],
+          ["File", "Score", "Language", "Level", "Lines", "Commits", "Churn", "Recent", "Authors", "Top author", "Imports", "Imported by"],
           data.hotspots.map((h) => [
-            h.path, h.score, h.commits, h.churn, h.recent_commits, h.authors,
+            h.path, h.score, h.language, h.level,
+            h.code_lines === null ? "-" : h.code_lines,
+            h.commits, h.churn, h.recent_commits, h.authors,
             Math.round(h.top_author_share * 100) + "%",
+            h.imports, h.imported_by,
           ]));
+
+        const d = data.dependencies;
+        $("deps").textContent = d.links + " verified links between " + d.files_with_links +
+          " files. Only imports that resolve to a file inside this repo are counted.";
+        fillTable($("imported"), ["File", "Imported by (files)"],
+          d.most_imported.map((m) => [m.path, m.imported_by]));
 
         fillTable($("contributors"), ["Name", "Commits", "Added", "Deleted"],
           data.contributors.map((c) => [c.name, c.commits, c.added, c.deleted]));
