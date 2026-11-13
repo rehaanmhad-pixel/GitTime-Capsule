@@ -27,7 +27,8 @@ def _run(repo, args, stdin_bytes=None):
         "-c", "core.quotepath=false",
         "-C", str(repo),
     ] + args
-    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0")
+    # LITERAL_PATHSPECS: file names are matched exactly, never as patterns.
+    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0", GIT_LITERAL_PATHSPECS="1")
     try:
         result = subprocess.run(
             cmd,

@@ -2,136 +2,129 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>GitTime-Capsule</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
-    input { width: 70%; padding: 0.5rem; }
-    button { padding: 0.5rem 1rem; }
-    #error { color: #b00020; margin-top: 1rem; }
-    table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; font-size: 0.85rem; }
-    td, th { border-bottom: 1px solid #ddd; padding: 0.3rem 0.5rem; text-align: left; }
-    .note { color: #555; font-size: 0.85rem; }
-    .scroll { max-height: 300px; overflow-y: auto; }
-  </style>
+  <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <h1>GitTime-Capsule</h1>
-  <p class="note">Temporary test page. The real design comes in batch 4.</p>
-  <input id="path" placeholder="e.g. ~/test-repos/click">
-  <button id="go">Analyze</button>
-  <div id="error"></div>
+  <header class="titleblock">
+    <div class="brand">
+      <h1>GitTime-Capsule</h1>
+      <p>Read your code’s history like layers of earth.</p>
+    </div>
+    <form id="open-form" class="opener" autocomplete="off">
+      <label for="path">Repository folder on this computer</label>
+      <div class="opener-row">
+        <input id="path" type="text" spellcheck="false" placeholder="~/test-repos/click">
+        <button id="go" type="submit">Begin excavation</button>
+      </div>
+    </form>
+  </header>
 
-  <div id="results" hidden>
-    <h2>Overview</h2>
-    <table id="overview"></table>
+  <main>
+    <p id="status" class="status" role="status" aria-live="polite"></p>
 
-    <h2>Languages</h2>
-    <p class="note">
-      Levels: <b>deep</b> = imports extracted and linked (Python, JavaScript, TypeScript, Java, C, C++, Rust) ·
-      <b>metrics</b> = recognised, line counts only (Go, C#) ·
-      <b>basic</b> = other text files · <b>binary</b> = Git history only.
-    </p>
-    <table id="languages"></table>
+    <section id="welcome" class="welcome">
+      <h2>Choose a site to dig</h2>
+      <p>Type the folder of any Git repository on this machine. GitTime-Capsule reads its history from the newest commit down to the first, and shows where changes keep piling up.</p>
+      <p>Everything happens on your computer. Your code is never uploaded anywhere.</p>
+    </section>
 
-    <h2>Hotspots</h2>
-    <p class="note" id="scoring"></p>
-    <div class="scroll"><table id="hotspots"></table></div>
+    <div id="report" class="layout" hidden>
+      <aside class="strata" aria-labelledby="strata-title">
+        <h2 id="strata-title">Strata</h2>
+        <p class="hint">One layer per month. Thicker, darker layers had more commits.</p>
+        <p class="strata-cap"><span>Surface</span><span id="cap-latest"></span></p>
+        <div class="strata-body" id="strata-body">
+          <div class="ticks" id="ticks" aria-hidden="true"></div>
+          <svg id="strata-svg" class="strata-svg" viewBox="0 0 100 1000" preserveAspectRatio="none" role="img" aria-label="Commits per month, newest at the top"></svg>
+        </div>
+        <p class="strata-cap"><span>Bedrock</span><span id="cap-first"></span></p>
+      </aside>
 
-    <h2>Most imported files</h2>
-    <p class="note" id="deps"></p>
-    <table id="imported"></table>
+      <div class="content">
+        <section aria-labelledby="report-title">
+          <h2 id="report-title">Site report</h2>
+          <div id="report-text"></div>
+        </section>
 
-    <h2>Top contributors</h2>
-    <table id="contributors"></table>
+        <section aria-labelledby="dig-title">
+          <h2 id="dig-title">Dig sites</h2>
+          <p class="hint">Files where changes pile up. A high score means “worth a look”, not “broken”.</p>
+          <details class="how">
+            <summary>How is the score worked out?</summary>
+            <div id="score-explainer"></div>
+          </details>
 
-    <h2>Timeline (per month)</h2>
-    <div class="scroll"><table id="timeline"></table></div>
-  </div>
+          <div class="controls">
+            <label class="search"><span>Search files</span>
+              <input id="search" type="search" placeholder="e.g. core or tests/">
+            </label>
+            <label><span>Language</span>
+              <select id="language"></select>
+            </label>
+            <label><span>Sort by</span>
+              <select id="sort">
+                <option value="score">Dig-site score</option>
+                <option value="commits">Most commits</option>
+                <option value="churn">Most lines changed</option>
+                <option value="recent">Most recent activity</option>
+                <option value="size">Largest files</option>
+              </select>
+            </label>
+          </div>
+          <div class="chips" id="chips" role="group" aria-label="File type"></div>
 
-  <script>
-    const $ = (id) => document.getElementById(id);
+          <p id="result-count" class="hint"></p>
+          <p id="empty" class="empty" hidden>No files match these filters. Clear the search or choose Everything.</p>
+          <div class="table-wrap">
+            <table id="sites">
+              <thead>
+                <tr>
+                  <th scope="col">File</th>
+                  <th scope="col">Score</th>
+                  <th scope="col" class="n">Commits</th>
+                  <th scope="col" class="n">Lines changed</th>
+                  <th scope="col" class="n">People</th>
+                  <th scope="col" class="n">Last changed</th>
+                </tr>
+              </thead>
+              <tbody id="sites-body"></tbody>
+            </table>
+          </div>
+          <button id="more" type="button" class="quiet" hidden></button>
+        </section>
 
-    function fillTable(table, headers, rows) {
-      table.replaceChildren();
-      const head = table.insertRow();
-      headers.forEach((h) => {
-        const th = document.createElement("th");
-        th.textContent = h;
-        head.appendChild(th);
-      });
-      rows.forEach((row) => {
-        const tr = table.insertRow();
-        row.forEach((value) => {
-          tr.insertCell().textContent = value;
-        });
-      });
-    }
+        <section aria-labelledby="exc-title">
+          <h2 id="exc-title">Excavators</h2>
+          <p class="hint">The people with the most commits.</p>
+          <ul id="excavators" class="tags"></ul>
+        </section>
 
-    $("go").addEventListener("click", async () => {
-      $("error").textContent = "";
-      $("results").hidden = true;
-      try {
-        const res = await fetch("/api/analyze", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: $("path").value }),
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          $("error").textContent = data.error || "Something went wrong.";
-          return;
-        }
+        <section aria-labelledby="lang-title">
+          <h2 id="lang-title">What we can read</h2>
+          <p class="hint" id="dep-note"></p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Language</th>
+                  <th scope="col">How deeply we read it</th>
+                  <th scope="col" class="n">Files</th>
+                  <th scope="col" class="n">Non-blank lines</th>
+                </tr>
+              </thead>
+              <tbody id="lang-body"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
 
-        const o = data.overview;
-        fillTable($("overview"), ["Item", "Value"], [
-          ["Path", o.path],
-          ["Commits", o.total_commits],
-          ["Contributors", o.total_contributors],
-          ["First commit", o.first_commit],
-          ["Last commit", o.last_commit],
-          ["Files at latest version", o.files_at_head],
-          ["Lines added (all time)", o.lines_added],
-          ["Lines deleted (all time)", o.lines_deleted],
-        ]);
+  <aside id="inspector" class="inspector" hidden aria-labelledby="insp-title"></aside>
+  <div id="tip" class="tip" hidden></div>
 
-        fillTable($("languages"), ["Language", "Level", "Files", "Non-blank lines"],
-          data.languages.map((l) => [l.language, l.level, l.files, l.code_lines]));
-
-        const s = data.scoring;
-        $("scoring").textContent =
-          "Score = " + s.frequency_weight * 100 + "% change frequency + " +
-          s.churn_weight * 100 + "% churn (log-scaled) + " +
-          s.recent_weight * 100 + "% commits in the last " + s.recent_days +
-          " days + " + s.size_weight * 100 + "% file size (log-scaled). " +
-          "A high score means 'worth a look', not 'buggy'.";
-
-        fillTable($("hotspots"),
-          ["File", "Score", "Language", "Level", "Lines", "Commits", "Churn", "Recent", "Authors", "Top author", "Imports", "Imported by"],
-          data.hotspots.map((h) => [
-            h.path, h.score, h.language, h.level,
-            h.code_lines === null ? "-" : h.code_lines,
-            h.commits, h.churn, h.recent_commits, h.authors,
-            Math.round(h.top_author_share * 100) + "%",
-            h.imports, h.imported_by,
-          ]));
-
-        const d = data.dependencies;
-        $("deps").textContent = d.links + " verified links between " + d.files_with_links +
-          " files. Only imports that resolve to a file inside this repo are counted.";
-        fillTable($("imported"), ["File", "Imported by (files)"],
-          d.most_imported.map((m) => [m.path, m.imported_by]));
-
-        fillTable($("contributors"), ["Name", "Commits", "Added", "Deleted"],
-          data.contributors.map((c) => [c.name, c.commits, c.added, c.deleted]));
-
-        fillTable($("timeline"), ["Month", "Commits", "Added", "Deleted"],
-          data.timeline.map((t) => [t.month, t.commits, t.added, t.deleted]));
-
-        $("results").hidden = false;
-      } catch (e) {
-        $("error").textContent = "Could not reach the backend: " + e;
-      }
-    });
-  </script>
+  <script src="/static/app.js"></script>
 </body>
 </html>

@@ -1,8 +1,9 @@
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
+from werkzeug.exceptions import HTTPException
 
-from git_analyzer import RepoError, analyze
+from git_analyzer import RepoError, analyze, file_history
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
@@ -14,6 +15,12 @@ def index():
     return send_from_directory(FRONTEND_DIR, "index.html")
 
 
+@app.get("/static/<path:filename>")
+def static_files(filename):
+    # send_from_directory refuses paths that try to escape the folder.
+    return send_from_directory(FRONTEND_DIR, filename)
+
+
 @app.post("/api/analyze")
 def api_analyze():
     data = request.get_json(silent=True) or {}
@@ -21,6 +28,25 @@ def api_analyze():
         return jsonify(analyze(data.get("path", "")))
     except RepoError as err:
         return jsonify({"error": str(err)}), 400
+
+
+@app.post("/api/file-history")
+def api_file_history():
+    data = request.get_json(silent=True) or {}
+    try:
+        return jsonify(file_history(data.get("path", ""), data.get("file", "")))
+    except RepoError as err:
+        return jsonify({"error": str(err)}), 400
+
+
+@app.errorhandler(Exception)
+def unexpected(err):
+    if isinstance(err, HTTPException):
+        return err
+    app.logger.exception("Unexpected error")
+    return jsonify({
+        "error": "Something unexpected went wrong. The details are in the terminal running the backend."
+    }), 500
 
 
 if __name__ == "__main__":

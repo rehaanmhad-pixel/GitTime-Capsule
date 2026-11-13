@@ -10,6 +10,7 @@ import math
 from collections import Counter
 from datetime import datetime, timezone
 
+from categories import categorize
 from gitutil import RepoError, resolve_repo, run_git
 from languages import language_level
 from source_scan import scan_sources
@@ -20,6 +21,13 @@ W_CHURN = 0.30
 W_RECENT = 0.20
 W_SIZE = 0.15
 RECENT_DAYS = 90
+
+MAX_FILES_RETURNED = 3000
+MAX_EDGES_RETURNED = 20000
+RECENT_COMMITS_SHOWN = 10
+
+# Fields: hash, author, unix time, parent hashes, subject
+HISTORY_FORMAT = "--pretty=format:%x1e%H%x1f%an%x1f%at%x1f%P%x1f%s"
 
 
 def parse_history(output):
@@ -33,8 +41,8 @@ def parse_history(output):
     current = None
     for line in output.split("\n"):
         if line.startswith("\x1e"):
-            parts = line[1:].split("\x1f", 3)
-            if len(parts) < 4:
+            parts = line[1:].split("\x1f", 4)
+            if len(parts) < 5:
                 current = None
                 continue
             try:
@@ -42,7 +50,13 @@ def parse_history(output):
             except ValueError:
                 current = None
                 continue
-            current = {"author": parts[1], "ts": ts, "subject": parts[3], "files": []}
+            current = {
+                "author": parts[1],
+                "ts": ts,
+                "is_merge": len(parts[3].split()) > 1,
+                "subject": parts[4],
+                "files": [],
+            }
             commits.append(current)
         elif line.strip() and current is not None:
             pieces = line.split("\t", 2)
@@ -73,18 +87,23 @@ def compute_hotspots(commits, files, latest_ts, imports_out, imported_by):
     stats = {}
 
     for commit in commits:
+        ts = commit["ts"]
         for path, added, deleted in commit["files"]:
             if path not in files:
                 continue  # file no longer exists at the latest version
-            s = stats.setdefault(path, {
-                "commits": 0, "added": 0, "deleted": 0, "recent": 0,
-                "authors": Counter(),
-            })
+            s = stats.get(path)
+            if s is None:
+                s = stats[path] = {
+                    "commits": 0, "added": 0, "deleted": 0, "recent": 0,
+                    "authors": Counter(), "first": ts, "last": ts,
+                }
             s["commits"] += 1
             s["added"] += added
             s["deleted"] += deleted
             s["authors"][commit["author"]] += 1
-            if commit["ts"] >= cutoff:
+            s["first"] = min(s["first"], ts)
+            s["last"] = max(s["last"], ts)
+            if ts >= cutoff:
                 s["recent"] += 1
 
     if not stats:
@@ -114,6 +133,7 @@ def compute_hotspots(commits, files, latest_ts, imports_out, imported_by):
             "score": round(score, 1),
             "language": info["language"],
             "level": info["level"],
+            "category": categorize(path, info["language"]),
             "code_lines": info["code_lines"],
             "commits": s["commits"],
             "added": s["added"],
@@ -123,6 +143,8 @@ def compute_hotspots(commits, files, latest_ts, imports_out, imported_by):
             "authors": len(s["authors"]),
             "top_author": top_author,
             "top_author_share": round(top_count / s["commits"], 2),
+            "first_changed": date_str(s["first"]),
+            "last_changed": date_str(s["last"]),
             "imports": imports_out.get(path, 0),
             "imported_by": imported_by.get(path, 0),
         })
@@ -134,10 +156,7 @@ def compute_hotspots(commits, files, latest_ts, imports_out, imported_by):
 def analyze(path_str):
     repo = resolve_repo(path_str)
 
-    history = run_git(repo, [
-        "log", "--no-renames", "--numstat",
-        "--pretty=format:%x1e%H%x1f%an%x1f%at%x1f%s",
-    ])
+    history = run_git(repo, ["log", "--no-renames", "--numstat", HISTORY_FORMAT])
     commits = parse_history(history)
     if not commits:
         raise RepoError("This repository has no commits yet.")
@@ -152,8 +171,13 @@ def analyze(path_str):
     contributors = {}
     timeline = {}
     total_added = total_deleted = 0
+    merge_commits = 0
 
     for c in commits:
+        if c["is_merge"]:
+            merge_commits += 1
+            continue  # merges carry no line changes; counted separately
+
         added = sum(f[1] for f in c["files"])
         deleted = sum(f[2] for f in c["files"])
         total_added += added
@@ -169,7 +193,7 @@ def analyze(path_str):
         bucket["added"] += added
         bucket["deleted"] += deleted
 
-    top_contributors = sorted(contributors.items(), key=lambda kv: kv[1]["commits"], reverse=True)[:10]
+    top_contributors = sorted(contributors.items(), key=lambda kv: kv[1]["commits"], reverse=True)[:12]
     hotspots = compute_hotspots(commits, files, latest_ts, imports_out, imported_by)
 
     languages = {}
@@ -188,6 +212,8 @@ def analyze(path_str):
         "overview": {
             "path": str(repo),
             "total_commits": len(commits),
+            "non_merge_commits": len(commits) - merge_commits,
+            "merge_commits": merge_commits,
             "total_contributors": len(contributors),
             "first_commit": date_str(first_ts),
             "last_commit": date_str(latest_ts),
@@ -197,7 +223,8 @@ def analyze(path_str):
         },
         "contributors": [{"name": n, **v} for n, v in top_contributors],
         "timeline": [{"month": m, **v} for m, v in sorted(timeline.items())],
-        "hotspots": hotspots[:20],
+        "files": hotspots[:MAX_FILES_RETURNED],
+        "files_total": len(hotspots),
         "languages": language_list,
         "analysis_levels": dict(Counter(info["level"] for info in files.values())),
         "dependencies": {
@@ -207,6 +234,8 @@ def analyze(path_str):
                 {"path": p, "imported_by": n} for p, n in imported_by.most_common(10)
             ],
         },
+        "edges": [[src, dst] for src, dst in edges[:MAX_EDGES_RETURNED]],
+        "edges_truncated": len(edges) > MAX_EDGES_RETURNED,
         "scoring": {
             "frequency_weight": W_FREQUENCY,
             "churn_weight": W_CHURN,
@@ -214,4 +243,42 @@ def analyze(path_str):
             "size_weight": W_SIZE,
             "recent_days": RECENT_DAYS,
         },
+    }
+
+
+def file_history(path_str, file_path):
+    """History of one file: commits per month plus its latest changes."""
+    repo = resolve_repo(path_str)
+    if not isinstance(file_path, str) or not file_path.strip() or "\0" in file_path:
+        raise RepoError("Choose a file from the list first.")
+
+    base = ["log", "--no-renames", "--no-merges", "--full-history"]
+
+    stamps = run_git(repo, base + ["--pretty=format:%at", "--", file_path])
+    months = Counter()
+    for line in stamps.split("\n"):
+        line = line.strip()
+        if line.isdigit():
+            months[month_str(int(line))] += 1
+    if not months:
+        raise RepoError("No history found for that file.")
+
+    recent_output = run_git(repo, base + [
+        "--max-count=%d" % RECENT_COMMITS_SHOWN,
+        "--numstat", HISTORY_FORMAT, "--", file_path,
+    ])
+    recent = []
+    for c in parse_history(recent_output):
+        recent.append({
+            "date": date_str(c["ts"]),
+            "author": c["author"],
+            "subject": c["subject"],
+            "added": sum(f[1] for f in c["files"]),
+            "deleted": sum(f[2] for f in c["files"]),
+        })
+
+    return {
+        "monthly": [{"month": m, "commits": n} for m, n in sorted(months.items())],
+        "recent": recent,
+        "total_commits": sum(months.values()),
     }
