@@ -4,27 +4,36 @@
   <meta charset="UTF-8">
   <title>GitTime-Capsule</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+    body { font-family: system-ui, sans-serif; max-width: 1000px; margin: 2rem auto; padding: 0 1rem; }
     input { width: 70%; padding: 0.5rem; }
     button { padding: 0.5rem 1rem; }
     #error { color: #b00020; margin-top: 1rem; }
-    table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; }
+    table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; font-size: 0.9rem; }
     td, th { border-bottom: 1px solid #ddd; padding: 0.3rem 0.5rem; text-align: left; }
+    .note { color: #555; font-size: 0.85rem; }
+    .scroll { max-height: 300px; overflow-y: auto; }
   </style>
 </head>
 <body>
   <h1>GitTime-Capsule</h1>
-  <p>Enter the folder path of a Git repository on this computer.</p>
+  <p class="note">Temporary test page. The real design comes in batch 4.</p>
   <input id="path" placeholder="e.g. ~/test-repos/click">
   <button id="go">Analyze</button>
   <div id="error"></div>
+
   <div id="results" hidden>
     <h2>Overview</h2>
-    <p id="summary"></p>
+    <table id="overview"></table>
+
+    <h2>Hotspots</h2>
+    <p class="note" id="scoring"></p>
+    <table id="hotspots"></table>
+
     <h2>Top contributors</h2>
     <table id="contributors"></table>
-    <h2>Most frequently changed files</h2>
-    <table id="files"></table>
+
+    <h2>Timeline (per month)</h2>
+    <div class="scroll"><table id="timeline"></table></div>
   </div>
 
   <script>
@@ -60,12 +69,39 @@
           $("error").textContent = data.error || "Something went wrong.";
           return;
         }
-        $("summary").textContent =
-          data.total_commits + " commits by " + data.total_contributors + " contributors in " + data.path;
-        fillTable($("contributors"), ["Name", "Commits"],
-          data.contributors.map((c) => [c.name, c.commits]));
-        fillTable($("files"), ["File", "Times changed"],
-          data.top_files.map((f) => [f.path, f.changes]));
+
+        const o = data.overview;
+        fillTable($("overview"), ["Item", "Value"], [
+          ["Path", o.path],
+          ["Commits", o.total_commits],
+          ["Contributors", o.total_contributors],
+          ["First commit", o.first_commit],
+          ["Last commit", o.last_commit],
+          ["Files at latest version", o.files_at_head],
+          ["Lines added (all time)", o.lines_added],
+          ["Lines deleted (all time)", o.lines_deleted],
+        ]);
+
+        const s = data.scoring;
+        $("scoring").textContent =
+          "Score = " + s.frequency_weight * 100 + "% change frequency + " +
+          s.churn_weight * 100 + "% churn (log-scaled) + " +
+          s.recent_weight * 100 + "% commits in the last " + s.recent_days +
+          " days. A high score means 'worth a look', not 'buggy'.";
+
+        fillTable($("hotspots"),
+          ["File", "Score", "Commits", "Churn", "Recent", "Authors", "Top author share"],
+          data.hotspots.map((h) => [
+            h.path, h.score, h.commits, h.churn, h.recent_commits, h.authors,
+            Math.round(h.top_author_share * 100) + "%",
+          ]));
+
+        fillTable($("contributors"), ["Name", "Commits", "Added", "Deleted"],
+          data.contributors.map((c) => [c.name, c.commits, c.added, c.deleted]));
+
+        fillTable($("timeline"), ["Month", "Commits", "Added", "Deleted"],
+          data.timeline.map((t) => [t.month, t.commits, t.added, t.deleted]));
+
         $("results").hidden = false;
       } catch (e) {
         $("error").textContent = "Could not reach the backend: " + e;
